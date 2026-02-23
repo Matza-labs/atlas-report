@@ -1,7 +1,8 @@
-"""Scoring — complexity and fragility metrics for a CICDGraph.
+"""Scoring — complexity, fragility, and maturity metrics for a CICDGraph.
 
 Complexity: based on node count, edge count, depth, max fan-out.
 Fragility: based on secrets, unpinned images, cross-triggers, missing docs.
+Maturity: based on caching, parallelism, pinned deps, doc coverage, retries, env isolation.
 """
 
 from __future__ import annotations
@@ -30,6 +31,15 @@ class Scores:
     unpinned_image_count: int = 0
     missing_doc_types: int = 0
     fragility_score: float = 0.0  # 0-100
+
+    # Maturity components
+    has_caching: bool = False
+    has_parallelism: bool = False
+    pinned_image_ratio: float = 0.0
+    doc_coverage: float = 0.0
+    has_retries: bool = False
+    has_env_isolation: bool = False
+    maturity_score: float = 0.0  # 0-100
 
 
 def compute_scores(graph: CICDGraph) -> Scores:
@@ -82,6 +92,60 @@ def compute_scores(graph: CICDGraph) -> Scores:
         + s.missing_doc_types * 8
     )
     s.fragility_score = min(round(frag_raw, 1), 100.0)
+
+    # ── Maturity ──────────────────────────────────────────────
+    maturity_points = 0
+    max_points = 6  # 6 dimensions, each worth ~16.7 points
+
+    # 1. Caching: any step/job referencing "cache"
+    step_nodes = [n for n in graph.nodes if n.node_type == NodeType.STEP]
+    s.has_caching = any(
+        "cache" in (getattr(n, "command", "") or "").lower()
+        for n in step_nodes
+    )
+    if s.has_caching:
+        maturity_points += 1
+
+    # 2. Parallelism: any stage with parallel=True or multiple jobs from one pipeline
+    stages = [n for n in graph.nodes if n.node_type == NodeType.STAGE]
+    s.has_parallelism = any(getattr(n, "parallel", False) for n in stages)
+    if not s.has_parallelism and s.max_fan_out >= 2:
+        s.has_parallelism = True
+    if s.has_parallelism:
+        maturity_points += 1
+
+    # 3. Pinned images
+    images = [n for n in graph.nodes if n.node_type == NodeType.CONTAINER_IMAGE]
+    if images:
+        pinned = sum(1 for n in images if getattr(n, "pinned", False))
+        s.pinned_image_ratio = pinned / len(images)
+    else:
+        s.pinned_image_ratio = 1.0  # No images = no risk
+    if s.pinned_image_ratio >= 0.8:
+        maturity_points += 1
+
+    # 4. Doc coverage
+    expected_docs = {"readme", "architecture", "runbook", "security_policy", "codeowners"}
+    s.doc_coverage = 1.0 - (s.missing_doc_types / len(expected_docs)) if expected_docs else 1.0
+    if s.doc_coverage >= 0.6:
+        maturity_points += 1
+
+    # 5. Retry policies
+    s.has_retries = any(
+        "retry" in (getattr(n, "command", "") or "").lower()
+        or "retry" in str(getattr(n, "metadata", {}))
+        for n in graph.nodes
+    )
+    if s.has_retries:
+        maturity_points += 1
+
+    # 6. Environment isolation
+    env_nodes = [n for n in graph.nodes if n.node_type == NodeType.ENVIRONMENT]
+    s.has_env_isolation = len(env_nodes) >= 2
+    if s.has_env_isolation:
+        maturity_points += 1
+
+    s.maturity_score = round((maturity_points / max_points) * 100, 1)
 
     return s
 
