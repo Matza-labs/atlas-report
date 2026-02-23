@@ -14,6 +14,7 @@ from typing import Any
 from atlas_sdk.models.findings import Finding
 from atlas_sdk.models.graph import CICDGraph
 
+from atlas_report.executive import render_executive
 from atlas_report.json_renderer import render_json
 from atlas_report.markdown_renderer import render_markdown
 from atlas_report.report_data import ReportData
@@ -65,3 +66,14 @@ class ReportGenerator:
         """Generate a full JSON report."""
         data = self.generate(graph, findings, modernization_notes)
         return render_json(data)
+
+    def generate_executive(
+        self,
+        graph: CICDGraph,
+        findings: list[Finding],
+        modernization_notes: str = "",
+    ) -> str:
+        """Generate a C-level executive summary."""
+        data = self.generate(graph, findings, modernization_notes)
+        return render_executive(data)
+
